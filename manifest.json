@@ -1,0 +1,56 @@
+{
+    "manifest_version": "0.3",
+    "name": "Spark",
+    "display_name": "Spark",
+    "version": "1.0.0",
+    "description": "Connect Claude to Spark - read-only access to your email, calendars, meetings, and contacts.",
+    "long_description": "Give Claude read-only access to Spark on macOS so it can answer questions about your workspace. Search and browse emails, list folders, read full threads with bodies and attachments, look up contacts, check calendar events, find mutual availability with teammates, and review meeting transcripts with summaries and notes. Tools are discovered dynamically from the running Spark Desktop app. Claude cannot send mail, post comments, or change anything in your inbox - write access will be added in a later release.",
+    "author": {
+        "name": "Spark Mail Limited",
+        "url": "https://sparkmailapp.com"
+    },
+    "homepage": "https://sparkmailapp.com",
+    "icon": "icon.png",
+    "license": "MIT",
+    "server": {
+        "type": "node",
+        "entry_point": "server/index.js",
+        "mcp_config": {
+            "command": "node",
+            "args": ["${__dirname}/server/index.js"]
+        }
+    },
+    "tools": [
+        {
+            "name": "accounts",
+            "description": "List all configured email accounts with their calendars, teams, and shared inboxes"
+        },
+        { "name": "folders", "description": "List folders with message counts" },
+        {
+            "name": "emails",
+            "description": "List emails with metadata, pagination, and Gmail-style filters"
+        },
+        {
+            "name": "search",
+            "description": "Search emails by topic using keyword and semantic matching"
+        },
+        {
+            "name": "thread",
+            "description": "Read a full email thread with headers, bodies, and attachments"
+        },
+        { "name": "events", "description": "List calendar events for a time range" },
+        { "name": "availability", "description": "Find free time slots for scheduling" },
+        { "name": "contacts", "description": "Search contacts by name or email" },
+        { "name": "team", "description": "Show team info, members, and assignments" },
+        { "name": "meetings", "description": "List meeting transcripts" },
+        {
+            "name": "meeting",
+            "description": "Read a meeting transcript summary, transcript, and notes"
+        }
+    ],
+    "tools_generated": true,
+    "keywords": ["spark", "email", "calendar", "meetings", "teams", "productivity"],
+    "compatibility": {
+        "platforms": ["darwin"]
+    }
+}

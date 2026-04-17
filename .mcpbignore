@@ -1,0 +1,7 @@
+# Exclude files that are co-located in mcpb/ but NOT part of the MCP server
+# bundle. These are source and output for the separately-distributed
+# Spark.skill Claude Agent Skill - users install it as a distinct artifact.
+
+skill/
+build/
+build-skill.sh
