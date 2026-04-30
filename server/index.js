@@ -19,7 +19,11 @@ process.on("unhandledRejection", (err) => {
 });
 
 const execFileAsync = promisify(execFile);
-const SPARK_PATH = process.env.SPARK_PATH || "spark";
+
+// Use the absolute path: GUI apps on macOS inherit a minimal PATH that
+// does not include /usr/local/bin, where Spark CLI Setup installs the
+// `spark` symlink, so resolving by name would fail under Claude Desktop.
+const SPARK_PATH = process.env.SPARK_PATH || "/usr/local/bin/spark";
 const EXEC_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
@@ -82,7 +86,7 @@ async function loadCatalogOnce() {
   } catch (err) {
     const detail =
       err.code === "ENOENT"
-        ? `'${SPARK_PATH}' not found. Install Spark Desktop or set SPARK_PATH.`
+        ? `'${SPARK_PATH}' not found. Install Spark Desktop and enable the Spark CLI (Settings → AI Agents → Spark CLI Setup), or set SPARK_PATH to the spark binary.`
         : err.stderr?.trim() || err.message;
     catalogError = new Error(
       `Cannot load spark tools: ${detail}`,
