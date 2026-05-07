@@ -2,9 +2,9 @@
     "manifest_version": "0.3",
     "name": "Spark",
     "display_name": "Spark",
-    "version": "1.0.0",
-    "description": "Connect Claude to Spark - read-only access to your email, calendars, meetings, and contacts.",
-    "long_description": "Give Claude read-only access to Spark on macOS so it can answer questions about your workspace. Search and browse emails, list folders, read full threads with bodies and attachments, look up contacts, check calendar events, find mutual availability with teammates, and review meeting transcripts with summaries and notes. Tools are discovered dynamically from the running Spark Desktop app. Claude cannot send mail, post comments, or change anything in your inbox - write access will be added in a later release.",
+    "version": "1.1.0",
+    "description": "Connect Claude to Spark - read, draft, triage, and act on your email, calendars, meetings, and contacts.",
+    "long_description": "Give Claude access to Spark on macOS so it can both answer questions about your workspace and act on it. Search and browse emails, list folders, read full threads with bodies and attachments, look up contacts, check calendar events, find mutual availability with teammates, and review meeting transcripts. With write access, Claude can also compose drafts (new, reply, forward, with attachments), post team chat comments on shared threads, triage messages (archive, pin, snooze, move, label, mark as done, share with team, assign and delegate), reclassify smart categories, and manage contacts (block/accept, category, important/primary, auto-summary). Tools are discovered dynamically from the running Spark Desktop app. Each account and shared inbox has its own access level - read-only or triage - configurable in Spark Desktop > Settings > AI Agents.",
     "author": {
         "name": "Spark Mail Limited",
         "url": "https://sparkmailapp.com"
@@ -46,6 +46,22 @@
         {
             "name": "meeting",
             "description": "Read a meeting transcript summary, transcript, and notes"
+        },
+        {
+            "name": "draft",
+            "description": "Create or edit an email draft - new, reply, forward, or update; supports attachments and markdown body"
+        },
+        {
+            "name": "comment",
+            "description": "Post a team chat comment on a thread; auto-shares the thread if needed"
+        },
+        {
+            "name": "action",
+            "description": "Perform email actions - archive, pin, snooze, move, label, assign, share, mark as done, reclassify category, and more"
+        },
+        {
+            "name": "contact-action",
+            "description": "Manage contacts - block/accept, change category, mark important/primary, toggle auto-summary"
         }
     ],
     "tools_generated": true,

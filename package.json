@@ -1,6 +1,6 @@
 {
   "name": "spark-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server connecting Claude to Spark - email, calendars, meetings, and team collaboration",
   "type": "module",
   "main": "server/index.js",
