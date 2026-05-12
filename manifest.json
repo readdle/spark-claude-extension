@@ -9,9 +9,16 @@
         "name": "Spark Mail Limited",
         "url": "https://sparkmailapp.com"
     },
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/readdle/spark-claude-extension.git"
+    },
     "homepage": "https://sparkmailapp.com",
+    "documentation": "https://github.com/readdle/spark-claude-extension#readme",
+    "support": "mailto:support@sparkmailapp.com",
     "icon": "icon.png",
     "license": "MIT",
+    "privacy_policies": ["https://sparkmailapp.com/privacy"],
     "server": {
         "type": "node",
         "entry_point": "server/index.js",
@@ -67,6 +74,9 @@
     "tools_generated": true,
     "keywords": ["spark", "email", "calendar", "meetings", "teams", "productivity"],
     "compatibility": {
-        "platforms": ["darwin"]
+        "platforms": ["darwin"],
+        "runtimes": {
+            "node": ">=18.0.0"
+        }
     }
 }

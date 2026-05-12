@@ -37,6 +37,10 @@ The skill extends the extension for more complex use cases.
 1. Download [`Spark.skill`](https://github.com/readdle/spark-claude-extension/releases/latest/download/Spark.skill)
 2. Double-click the downloaded `Spark.skill` file to install it into Claude Desktop.
 
+## Privacy Policy
+
+This extension is a local bridge between Claude Desktop and Spark Desktop on your Mac - it does not collect or transmit data on its own, so use of it is governed by Spark's official privacy policy: [https://sparkmailapp.com/privacy](https://sparkmailapp.com/privacy).
+
 ## License
 
 [MIT](LICENSE) © Spark Mail Limited

@@ -27,6 +27,38 @@ const SPARK_PATH = process.env.SPARK_PATH || "/usr/local/bin/spark";
 const EXEC_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
+// Required by the Claude Connectors Directory: every tool must carry
+// either `readOnlyHint: true` or `destructiveHint: true`. The spark CLI
+// catalog may include `annotations` per tool; this static map is the
+// fallback for known tools and the safe default for any future write
+// tool the CLI may add.
+const READ_ONLY_TOOLS = new Set([
+  "accounts",
+  "folders",
+  "emails",
+  "search",
+  "thread",
+  "events",
+  "availability",
+  "contacts",
+  "team",
+  "meetings",
+  "meeting",
+]);
+
+function defaultAnnotationsFor(toolName) {
+  return READ_ONLY_TOOLS.has(toolName)
+    ? { readOnlyHint: true }
+    : { destructiveHint: true };
+}
+
+function humanizeToolName(name) {
+  return name
+    .split(/[-_]/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 console.error(`[spark-mcp] using spark at: ${SPARK_PATH}`);
 
 let catalog = null;
@@ -180,12 +212,20 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   await ensureCatalog();
   return {
-    tools: catalog.tools.map((tool) => ({
-      name: tool.name,
-      title: tool.title,
-      description: tool.description,
-      inputSchema: buildInputSchema(tool.parameters),
-    })),
+    tools: catalog.tools.map((tool) => {
+      const annotations = {
+        title: tool.title || humanizeToolName(tool.name),
+        ...defaultAnnotationsFor(tool.name),
+        ...(tool.annotations || {}),
+      };
+      return {
+        name: tool.name,
+        title: annotations.title,
+        description: tool.description,
+        inputSchema: buildInputSchema(tool.parameters),
+        annotations,
+      };
+    }),
   };
 });
 
