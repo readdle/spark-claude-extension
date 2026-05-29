@@ -6,6 +6,7 @@ What Claude can do:
 
 - Search and browse your emails across all connected accounts
 - Read full threads with bodies and attachments
+- Read individual attachment contents directly (images, PDFs, text files)
 - List folders and shared inboxes
 - Look up contacts
 - Check calendar events and find free time slots for scheduling

@@ -27,6 +27,22 @@ const SPARK_PATH = process.env.SPARK_PATH || "/usr/local/bin/spark";
 const EXEC_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
+// Hard cap on per-attachment file size returned through MCP content blocks.
+// Bytes are loaded fully into memory and base64-encoded over stdio - anything
+// larger than this is rejected with a clear error instead of risking the
+// server's memory budget. Override with the SPARK_ATTACHMENT_MAX_BYTES env var.
+const ATTACHMENT_MAX_BYTES =
+  Number(process.env.SPARK_ATTACHMENT_MAX_BYTES) || 50 * 1024 * 1024;
+
+// Treated as plain text (utf8) in addition to anything with a text/* MIME.
+const TEXT_LIKE_MIMES = new Set([
+  "application/json",
+  "application/xml",
+  "application/x-ndjson",
+  "application/javascript",
+  "application/ecmascript",
+]);
+
 // Required by the Claude Connectors Directory: every tool must carry
 // either `readOnlyHint: true` or `destructiveHint: true`. The spark CLI
 // catalog may include `annotations` per tool; this static map is the
@@ -38,12 +54,15 @@ const READ_ONLY_TOOLS = new Set([
   "emails",
   "search",
   "thread",
+  "attachment",
   "events",
   "availability",
   "contacts",
   "team",
   "meetings",
   "meeting",
+  "templates",
+  "template",
 ]);
 
 function defaultAnnotationsFor(toolName) {
@@ -57,6 +76,19 @@ function humanizeToolName(name) {
     .split(/[-_]/)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function humanSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return `${bytes} B`;
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 console.error(`[spark-mcp] using spark at: ${SPARK_PATH}`);
@@ -185,7 +217,7 @@ function buildCliArgs(toolDef, input) {
   return [...positional, ...flagged];
 }
 
-const EXPECTED_SPARK_VERSION = "1.1.0";
+const EXPECTED_SPARK_VERSION = "1.2.1";
 
 // Load the catalog eagerly so the `initialize` handshake can forward the
 // Spark skill to Claude as the server's `instructions` field. If the
@@ -241,6 +273,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const { name, arguments: input = {} } = request.params;
 
+  if (name === "attachment") {
+    return handleAttachment(input);
+  }
+
   const toolDef = toolMap.get(name);
   if (!toolDef) {
     return {
@@ -250,6 +286,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   const args = [toolDef.command, ...buildCliArgs(toolDef, input)];
+
+  // Sandboxed clients (Claude Cowork) can't follow the local filesystem paths
+  // that the `thread` Attachments table normally prints, but they reflexively
+  // try to read them before falling back to the `attachment` tool. Force the
+  // CLI to drop the Path column so there is nothing tempting to chase - the
+  // ID column plus the `attachment` tool covers everything.
+  if (name === "thread" && !args.includes("--hide-attachment-paths")) {
+    args.push("--hide-attachment-paths");
+  }
 
   try {
     const { stdout, stderr } = await execFileAsync(SPARK_PATH, args, {
@@ -272,6 +317,177 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 });
+
+// Special-case the `attachment` tool: ask the CLI for metadata (so we know the
+// MIME type and size), enforce the MCP-side size cap, then ask the CLI again
+// with --stream to fetch the bytes. The --stream pipe is the canonical
+// "attachment bytes" channel - we deliberately do NOT re-read the local file
+// path in JS so there is exactly one place where attachment bytes leave Spark
+// Desktop.
+async function handleAttachment(input) {
+  const idRaw = input?.id;
+  if (idRaw === undefined || idRaw === null || idRaw === "") {
+    return {
+      content: [
+        { type: "text", text: "Error: 'id' parameter is required." },
+      ],
+      isError: true,
+    };
+  }
+  const idStr = String(idRaw).trim();
+  if (!/^\d+$/.test(idStr)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: 'id' must be a positive integer, got: ${idStr}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  // -- Step 1: metadata. Also serves as a cheap auto-download trigger, so the
+  // streaming call below is guaranteed to find the file on disk.
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(SPARK_PATH, ["attachment", idStr], {
+      timeout: EXEC_TIMEOUT_MS,
+      maxBuffer: MAX_OUTPUT_BYTES,
+    }));
+  } catch (err) {
+    const message = err.stderr?.trim() || err.message;
+    return {
+      content: [{ type: "text", text: `Error: ${message}` }],
+      isError: true,
+    };
+  }
+
+  const output = stdout.trim();
+  if (!output) {
+    return {
+      content: [
+        { type: "text", text: "Error: spark CLI returned no output." },
+      ],
+      isError: true,
+    };
+  }
+  if (output.startsWith("Error:")) {
+    return {
+      content: [{ type: "text", text: output }],
+      isError: true,
+    };
+  }
+
+  // Parse `Key: Value` lines into a plain object. Values can contain `: `
+  // (URLs, MIME parameters), so we split on the first `: ` only.
+  const parsed = {};
+  for (const line of output.split("\n")) {
+    const idx = line.indexOf(": ");
+    if (idx === -1) continue;
+    parsed[line.slice(0, idx).trim()] = line.slice(idx + 2);
+  }
+
+  // We deliberately don't require `Path` here - the MCP server doesn't read it.
+  const requiredKeys = ["ID", "Name", "Size", "MIME Type", "Message ID"];
+  const missing = requiredKeys.filter((k) => !(k in parsed));
+  if (missing.length > 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: attachment ${idStr} CLI returned malformed metadata (missing: ${missing.join(", ")}).\nCLI output:\n${output}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const sizeBytes = Number.parseInt(parsed.Size, 10);
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: attachment ${idStr} has invalid Size '${parsed.Size}'.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  if (sizeBytes > ATTACHMENT_MAX_BYTES) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: attachment ${idStr} is ${humanSize(sizeBytes)}, exceeds ${humanSize(ATTACHMENT_MAX_BYTES)} cap. Set SPARK_ATTACHMENT_MAX_BYTES to override, or open the email in Spark Desktop.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  // -- Step 2: stream the bytes back. `encoding: "buffer"` tells Node to give
+  // us the raw stdout Buffer instead of a UTF-8 string. We size maxBuffer to
+  // the cap plus a little slack so the cap itself is the only place size is
+  // enforced. The CLI writes raw bytes to its stdout via a chunked
+  // FileHandle.read loop inside SparklyRemote - we just collect them.
+  let bytes;
+  try {
+    ({ stdout: bytes } = await execFileAsync(
+      SPARK_PATH,
+      ["attachment", "--stream", idStr],
+      {
+        timeout: EXEC_TIMEOUT_MS,
+        maxBuffer: ATTACHMENT_MAX_BYTES + 1024,
+        encoding: "buffer",
+      },
+    ));
+  } catch (err) {
+    const message =
+      err.stderr?.toString("utf8").trim() || err.message;
+    return {
+      content: [{ type: "text", text: `Error: ${message}` }],
+      isError: true,
+    };
+  }
+
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+
+  const mime = parsed["MIME Type"] || "application/octet-stream";
+  const name = parsed.Name || "(unnamed)";
+  const messageId = parsed["Message ID"];
+  const summary = `Attachment: ${name} (${humanSize(buf.length)}, ${mime}, message ${messageId})`;
+
+  const content = [{ type: "text", text: summary }];
+  if (mime.startsWith("image/")) {
+    content.push({
+      type: "image",
+      data: buf.toString("base64"),
+      mimeType: mime,
+    });
+  } else if (mime.startsWith("audio/")) {
+    content.push({
+      type: "audio",
+      data: buf.toString("base64"),
+      mimeType: mime,
+    });
+  } else if (mime.startsWith("text/") || TEXT_LIKE_MIMES.has(mime)) {
+    content.push({ type: "text", text: buf.toString("utf8") });
+  } else {
+    content.push({
+      type: "resource",
+      resource: {
+        uri: `spark-attachment://${idStr}`,
+        mimeType: mime,
+        blob: buf.toString("base64"),
+      },
+    });
+  }
+
+  return { content };
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
