@@ -2,7 +2,7 @@
     "manifest_version": "0.3",
     "name": "Spark",
     "display_name": "Spark",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "description": "Connect Claude to Spark - read, draft, triage, and act on your email, calendars, meetings, and contacts.",
     "long_description": "Give Claude access to Spark on macOS so it can both answer questions about your workspace and act on it. Search and browse emails, list folders, read full threads with bodies and attachments, look up contacts, check calendar events, find mutual availability with teammates, and review meeting transcripts. With write access, Claude can also compose drafts (new, reply, forward, with attachments, or from saved templates) and share them with teammates, post team chat comments on shared threads, triage messages (archive, pin, snooze, move, label, mark as done, share with team, assign and delegate), reclassify smart categories, and manage contacts (block/accept, category, important/primary, auto-summary). Tools are discovered dynamically from the running Spark Desktop app. Each account and shared inbox has its own access level - read-only or triage - configurable in Spark Desktop > Settings > AI Agents.",
     "author": {
@@ -86,7 +86,7 @@
     "tools_generated": true,
     "keywords": ["spark", "email", "calendar", "meetings", "teams", "productivity"],
     "compatibility": {
-        "platforms": ["darwin"],
+        "platforms": ["darwin", "win32"],
         "runtimes": {
             "node": ">=18.0.0"
         }

@@ -20,8 +20,8 @@ What Claude can do:
 
 ## Requirements
 
-- macOS with a recent build of [Spark Desktop](https://sparkmailapp.com), signed in to at least one account.
-- Spark CLI enabled: in Spark, go to **Settings → AI Agents → Spark CLI Setup** and follow the prompts.
+- macOS or Windows with a recent build of [Spark Desktop](https://sparkmailapp.com), signed in to at least one account.
+- Spark CLI enabled: in Spark, go to **Settings → AI Agents → Spark CLI Setup** and follow the prompts. On Windows, restart Claude Desktop afterwards so it inherits the updated `PATH` (the same caveat as opening a new terminal).
 - For each account or shared inbox, choose the access level Claude should have: **Settings → AI Agents** (`read-only` or `triage`). Read-only allows browsing and reading; triage additionally allows drafts, comments, and email/contact actions. Shared inboxes can have a different level than their parent account.
 - Claude Desktop.
 
@@ -40,7 +40,7 @@ The skill extends the extension for more complex use cases.
 
 ## Privacy Policy
 
-This extension is a local bridge between Claude Desktop and Spark Desktop on your Mac - it does not collect or transmit data on its own, so use of it is governed by Spark's official privacy policy: [https://sparkmailapp.com/privacy](https://sparkmailapp.com/privacy).
+This extension is a local bridge between Claude Desktop and Spark Desktop on your computer - it does not collect or transmit data on its own, so use of it is governed by Spark's official privacy policy: [https://sparkmailapp.com/privacy](https://sparkmailapp.com/privacy).
 
 ## License
 
