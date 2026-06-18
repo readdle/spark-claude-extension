@@ -3,7 +3,10 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { access, readFile, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { basename } from "node:path";
 import { promisify } from "node:util";
 
 process.on("uncaughtException", err => {
@@ -206,7 +209,7 @@ function buildCliArgs(toolDef, input) {
     return [...positional, ...flagged];
 }
 
-const EXPECTED_SPARK_VERSION = "1.2.1";
+const EXPECTED_SPARK_VERSION = "1.2.2";
 
 // Load the catalog eagerly so the `initialize` handshake can forward the
 // Spark skill to Claude as the server's `instructions` field. If the
@@ -274,6 +277,23 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
         };
     }
 
+    // `draft` and `comment` accept file attachments by path, but a sandboxed
+    // Spark Desktop can't read paths outside its container. The MCP server is
+    // unsandboxed, so it reads the bytes and streams them through the CLI's
+    // public `--attach-stream` flag instead of forwarding `--attach <path>`.
+    if (name === "draft") {
+        return handleDraft(toolDef, input);
+    }
+    if (name === "comment") {
+        return handleComment(toolDef, input);
+    }
+
+    return runGenericTool(toolDef, name, input);
+});
+
+/// Builds and runs the CLI for a tool whose attachments (if any) the app can
+/// read directly - the original verbatim dispatch.
+async function runGenericTool(toolDef, name, input) {
     const args = [toolDef.command, ...buildCliArgs(toolDef, input)];
 
     // Log the command and arg count only - never the values, which can carry
@@ -313,7 +333,244 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
             isError: true
         };
     }
-});
+}
+
+/// Runs the spark CLI with `inputBuffer` piped to its stdin and collects
+/// stdout/stderr. `execFile` can't stream stdin, so attachment bytes go through
+/// `spawn` - the inbound mirror of how `handleAttachment` collects `--stream`
+/// bytes the other direction.
+function runSparkWithStdin(args, inputBuffer) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(SPARK_PATH, args, { timeout: EXEC_TIMEOUT_MS });
+        const outChunks = [];
+        const errChunks = [];
+        let outLen = 0;
+        child.stdout.on("data", chunk => {
+            outLen += chunk.length;
+            if (outLen <= MAX_OUTPUT_BYTES) outChunks.push(chunk);
+        });
+        child.stderr.on("data", chunk => errChunks.push(chunk));
+        child.on("error", reject);
+        child.on("close", code => {
+            const stdout = Buffer.concat(outChunks).toString("utf8");
+            const stderr = Buffer.concat(errChunks).toString("utf8");
+            if (code === 0) {
+                resolve({ stdout, stderr });
+            } else {
+                const err = new Error(stderr.trim() || `spark exited with code ${code}`);
+                err.stderr = stderr;
+                err.code = code;
+                reject(err);
+            }
+        });
+        // Swallow EPIPE: if the CLI rejects the request and exits before reading
+        // all bytes, the close handler reports the real error.
+        child.stdin.on("error", () => {});
+        child.stdin.end(inputBuffer);
+    });
+}
+
+function parseDraftId(output) {
+    const match = output.match(/^\s*ID:\s*(\d+)\s*$/m);
+    return match ? match[1] : null;
+}
+
+function normalizePaths(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter(p => p !== undefined && p !== null && p !== "")
+        .map(String);
+}
+
+/// Creates/edits the draft via the generic CLI call, then streams each readable
+/// attachment onto it with `--attach-stream`. Paths the server can't read are
+/// forwarded verbatim as `--attach` on the base call so the CLI reports them.
+async function handleDraft(toolDef, input) {
+    const attachPaths = normalizePaths(input.attach);
+    if (attachPaths.length === 0) {
+        return runGenericTool(toolDef, "draft", input);
+    }
+
+    // --unshare is mutually exclusive with content edits (attachments included),
+    // so forward unchanged and let the CLI reject it rather than silently
+    // unsharing and then attaching as two separate edits.
+    if (input.unshare) {
+        return runGenericTool(toolDef, "draft", input);
+    }
+
+    const streamable = [];
+    const fallback = [];
+    for (const path of attachPaths) {
+        let size;
+        try {
+            await access(path, fsConstants.R_OK);
+            size = (await stat(path)).size;
+        } catch {
+            console.error(`[spark-mcp] draft: cannot read '${basename(path)}', forwarding as --attach`);
+            fallback.push(path);
+            continue;
+        }
+        // Reject oversize files up front: the base draft is created below, so a
+        // size failure caught later would leave a partial draft behind.
+        if (size > ATTACHMENT_MAX_BYTES) {
+            return {
+                content: [{
+                    type: "text",
+                    text: `Error attaching '${basename(path)}': file is ${humanSize(size)}, exceeds the ${humanSize(ATTACHMENT_MAX_BYTES)} limit.`
+                }],
+                isError: true
+            };
+        }
+        streamable.push({ name: basename(path), path });
+    }
+
+    let pk = input.edit != null ? String(input.edit) : null;
+    const baseInput = { ...input, attach: fallback };
+    const contentKeys = Object.keys(input).filter(k => k !== "attach" && k !== "edit");
+    const needBase = pk === null || contentKeys.length > 0 || fallback.length > 0;
+
+    let lastOutput = "";
+    if (needBase) {
+        const args = ["draft", ...buildCliArgs(toolDef, baseInput)];
+        console.error(`[spark-mcp] tool 'draft' -> spark draft (${args.length - 1} args, base)`);
+        try {
+            const { stdout, stderr } = await execFileAsync(SPARK_PATH, args, {
+                timeout: EXEC_TIMEOUT_MS,
+                maxBuffer: MAX_OUTPUT_BYTES
+            });
+            lastOutput = stdout.trim() || stderr.trim();
+        } catch (err) {
+            const message = err.stderr?.trim() || err.message;
+            console.error(`[spark-mcp] tool 'draft' base failed: ${message}`);
+            return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+        }
+        if (pk === null) {
+            pk = parseDraftId(lastOutput);
+            if (!pk) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Error: could not determine draft ID to attach files.\n${lastOutput}`
+                        }
+                    ],
+                    isError: true
+                };
+            }
+        }
+    }
+
+    for (const file of streamable) {
+        let bytes;
+        try {
+            bytes = await readFile(file.path);
+        } catch (err) {
+            const message = err.message;
+            console.error(`[spark-mcp] tool 'draft' attach read failed: ${message}`);
+            return {
+                content: [{ type: "text", text: `Error attaching '${file.name}': ${message}` }],
+                isError: true
+            };
+        }
+        // Joined =form so a basename starting with "-" is read as the value, not an option.
+        // No --team here: on an already-shared draft Spark rejects a content edit
+        // (the streamed attachment) combined with a sharing flag like --team.
+        const args = ["draft", "--edit", pk, `--attach-stream=${file.name}`];
+        console.error(`[spark-mcp] tool 'draft' -> spark draft --edit --attach-stream (${bytes.length} bytes)`);
+        try {
+            const { stdout, stderr } = await runSparkWithStdin(args, bytes);
+            lastOutput = stdout.trim() || stderr.trim() || lastOutput;
+        } catch (err) {
+            const message = err.stderr?.trim() || err.message;
+            console.error(`[spark-mcp] tool 'draft' attach-stream failed: ${message}`);
+            return {
+                content: [{ type: "text", text: `Error attaching '${file.name}': ${message}` }],
+                isError: true
+            };
+        }
+    }
+
+    return { content: [{ type: "text", text: lastOutput || "(no output)" }] };
+}
+
+/// Posts the optional text comment, then streams each readable attachment as
+/// its own comment message (matching the CLI's "one file per message" rule).
+/// Edits and attachment-free calls fall through to the generic path so the
+/// CLI's own validation surfaces.
+async function handleComment(toolDef, input) {
+    const attachPaths = normalizePaths(input.attach);
+    const messageId = input.message_id != null ? String(input.message_id) : null;
+    if (attachPaths.length === 0 || input.edit != null || messageId === null) {
+        return runGenericTool(toolDef, "comment", input);
+    }
+
+    const shareArgs = [];
+    if (input.team != null) shareArgs.push("--team", String(input.team));
+    for (const u of normalizePaths(input.user)) shareArgs.push("--user", u);
+
+    const outputs = [];
+    let hadError = false;
+
+    if (input.body != null) {
+        const args = ["comment", messageId, "--body", String(input.body), ...shareArgs];
+        console.error(`[spark-mcp] tool 'comment' -> spark comment --body (${args.length - 1} args)`);
+        try {
+            const { stdout, stderr } = await execFileAsync(SPARK_PATH, args, {
+                timeout: EXEC_TIMEOUT_MS,
+                maxBuffer: MAX_OUTPUT_BYTES
+            });
+            outputs.push(stdout.trim() || stderr.trim());
+        } catch (err) {
+            const message = err.stderr?.trim() || err.message;
+            console.error(`[spark-mcp] tool 'comment' body failed: ${message}`);
+            return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
+        }
+    }
+
+    for (const path of attachPaths) {
+        const name = basename(path);
+        let bytes;
+        try {
+            const { size } = await stat(path);
+            if (size > ATTACHMENT_MAX_BYTES) {
+                hadError = true;
+                outputs.push(`Error attaching '${name}': file is ${humanSize(size)}, exceeds the ${humanSize(ATTACHMENT_MAX_BYTES)} limit.`);
+                continue;
+            }
+            bytes = await readFile(path);
+        } catch {
+            console.error(`[spark-mcp] comment: cannot read '${path}', forwarding as --attach`);
+            const args = ["comment", messageId, "--attach", path, ...shareArgs];
+            try {
+                const { stdout, stderr } = await execFileAsync(SPARK_PATH, args, {
+                    timeout: EXEC_TIMEOUT_MS,
+                    maxBuffer: MAX_OUTPUT_BYTES
+                });
+                outputs.push(stdout.trim() || stderr.trim());
+            } catch (err) {
+                hadError = true;
+                outputs.push(`Error attaching '${name}': ${err.stderr?.trim() || err.message}`);
+            }
+            continue;
+        }
+        // Joined =form so a basename starting with "-" is read as the value, not an option.
+        const args = ["comment", messageId, `--attach-stream=${name}`, ...shareArgs];
+        console.error(`[spark-mcp] tool 'comment' -> spark comment --attach-stream (${bytes.length} bytes)`);
+        try {
+            const { stdout, stderr } = await runSparkWithStdin(args, bytes);
+            outputs.push(stdout.trim() || stderr.trim());
+        } catch (err) {
+            hadError = true;
+            console.error(`[spark-mcp] tool 'comment' attach-stream failed: ${err.message}`);
+            outputs.push(`Error attaching '${name}': ${err.stderr?.trim() || err.message}`);
+        }
+    }
+
+    return {
+        content: [{ type: "text", text: outputs.join("\n\n") || "(no output)" }],
+        ...(hadError ? { isError: true } : {})
+    };
+}
 
 // Special-case the `attachment` tool: ask the CLI for metadata (so we know the
 // MIME type and size), enforce the MCP-side size cap, then ask the CLI again

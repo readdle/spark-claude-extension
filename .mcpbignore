@@ -2,3 +2,7 @@
 
 skill/
 Spark.skill
+
+# Build artifacts (the packed bundle and any stray unpacked copy).
+*.mcpb
+Spark/
