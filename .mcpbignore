@@ -1,7 +1,13 @@
 # Not part of the MCP server bundle.
 
 skill/
-Spark.skill
+build-*.sh
+*.skill
+
+# Local / IDE config (not auto-excluded by the packer like .git is).
+.claude/
+.cursor/
+.DS_Store
 
 # Build artifacts (the packed bundle and any stray unpacked copy).
 *.mcpb
