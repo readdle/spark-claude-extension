@@ -4,12 +4,13 @@ description: >-
   Use the Spark MCP extension to access and act on the user's Spark email
   data - list emails, search by topic, read threads, check calendar events,
   find availability, look up contacts, view team info, draft messages (from
-  scratch or saved templates), share drafts with teammates, post team comments,
-  triage threads, and manage contacts. Use when the user asks about their
+  scratch or saved templates), send drafts, share drafts with teammates, post
+  team comments, triage threads, create/update/delete calendar events and
+  manage attendees, and manage contacts. Use when the user asks about their
   emails, calendar, contacts, meetings, scheduling, or wants to send, reply,
-  archive, snooze, assign, comment, or categorize.
+  archive, snooze, assign, comment, categorize, or schedule.
 metadata:
-  version: 1.2.2
+  version: 1.3.0
   requires:
     mcp:
       - spark
@@ -27,6 +28,7 @@ Each account and shared inbox has its own **access level**, configured by the us
 |-------|-------------------|
 | **read-only** | List, search, and read emails, threads, folders, events, contacts, meetings, teams |
 | **triage** | Everything in read-only plus all write operations: `draft`, `comment`, `action`, `contact-action` |
+| **send** | Everything in triage plus mail-emitting operations: sending drafts (`action` with `send`, including scheduled "Send Later") and the entire `event` tool (create / update / delete / rsvp, including inviting or removing attendees) |
 
 Shared inboxes can have a different access level than the parent account - for example, a personal account may have triage access while a shared inbox under the same team is read-only or disabled.
 
@@ -55,6 +57,7 @@ Always call `accounts` once at the start of any non-trivial task to discover ava
 | `thread` | read-only | Read full thread - headers, bodies, attachments |
 | `attachment` | read-only | Read a single email attachment by ID (auto-downloads) |
 | `events` | read-only | List calendar events for a time range |
+| `event` | send | Create, update, delete, or RSVP to a calendar event; invite or remove attendees |
 | `availability` | read-only | Find free time slots, optionally with attendees |
 | `contacts` | read-only | Search contacts by name or email |
 | `team` | read-only | Show team info, members, shared inboxes, assignments |
@@ -64,7 +67,7 @@ Always call `accounts` once at the start of any non-trivial task to discover ava
 | `template` | read-only | Show a single template by ID or name with its placeholders |
 | `draft` | triage | Create or edit a draft (new, reply, forward, from template); share with team |
 | `comment` | triage | Post a team comment on a thread |
-| `action` | triage | Perform actions on emails (archive, pin, snooze, assign, etc.) |
+| `action` | triage (send for `send` / `unschedule`) | Perform actions on emails (archive, pin, snooze, assign, etc.); send a draft or manage a scheduled send at the **send** level |
 | `contact-action` | triage | Perform actions on contacts (block, accept, categorize, etc.) |
 
 ### accounts
@@ -244,6 +247,53 @@ events { "start": "2026-03-16", "end": "2026-03-20" }
 ```
 
 Call `accounts` to see available calendar accounts and calendar names.
+
+### event
+
+**Requires send access** on the target calendar's owning account. Every mode can emit mail through the calendar service (invitations on create/update, iTIP UPDATE/CANCEL on update/delete of attendee-bearing events, an iTIP REPLY on rsvp), so the whole tool sits at the **send** level.
+
+Create, update, delete, or RSVP to a calendar event, including managing its attendees. Use `add` / `remove` on `create` or `update` to invite or remove attendees; adding or removing attendees sends invitations / cancellations through the calendar provider (CalDAV / Google / Exchange).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `mode` | string | yes | `create`, `update`, `delete`, or `rsvp`. |
+| `event_id` | string | for `update`/`delete`/`rsvp` | For `update`/`delete`: a calendar event ID (use `events`). For `rsvp`: a calendar event ID **or** the message ID of the invitation email (use `emails` / `thread`). |
+| `status` | string | for `rsvp` | RSVP status: `accept`, `decline`, or `maybe`. |
+| `title` | string | no | Event title / summary. |
+| `start` | string | yes (for `create`) | Start date/time (`yyyy-MM-dd`, `dd/MM/yyyy`, `yyyy-MM-ddTHH:mm`, or `yyyy-MM-ddTHH:mm:ssXXX`). |
+| `end` | string | no | End date/time (same formats). |
+| `all_day` | boolean | no | Mark the event as all-day. |
+| `description` | string | no | Event description / notes. |
+| `alerts` | string | no | Comma-separated alert offsets (`Ns` for N seconds before, e.g. `300s,600s`) or absolute dates. |
+| `location` | string | no | Event location. |
+| `video_conference` | string | no | Attach a video conference: `auto` (account default), or `meet` / `zoom` / `teams`. |
+| `calendar` | string | no | Target calendar for `create` (`email@domain.com` or `email@domain.com:Name`). |
+| `add` | array of string | no | Attendee email address(es) to invite (create / update). New attendees receive an invitation. |
+| `remove` | array of string | no | Attendee email address(es) to remove (update). Removed attendees receive a cancellation. The organizer cannot be removed. |
+
+```
+event { "mode": "create", "title": "Sync", "start": "2026-07-01T12:00", "end": "2026-07-01T13:00" }
+event { "mode": "create", "title": "OOO", "start": "2026-07-01", "all_day": true }
+event { "mode": "create", "title": "Standup", "start": "2026-07-01T09:00", "end": "2026-07-01T09:15", "video_conference": "auto" }
+event { "mode": "create", "title": "1:1", "start": "2026-07-01T14:00", "end": "2026-07-01T14:30", "calendar": "user@co.com:Work" }
+event { "mode": "create", "title": "Sync", "start": "2026-07-01T12:00", "add": ["alice@co.com", "bob@co.com"] }   # create + invite
+event { "mode": "update", "event_id": "ABC-123", "title": "New title" }
+event { "mode": "update", "event_id": "ABC-123", "video_conference": "meet" }
+event { "mode": "update", "event_id": "ABC-123", "add": ["alice@co.com"], "remove": ["bob@co.com"] }   # swap attendees
+event { "mode": "delete", "event_id": "ABC-123" }
+event { "mode": "rsvp", "event_id": "ABC-123", "status": "accept" }   # calendar event ID
+event { "mode": "rsvp", "event_id": "44268", "status": "maybe" }      # invitation email message ID
+```
+
+**Attendees (`add` / `remove`):** valid only on `create` and `update`. Combine both on one `update` to swap attendees (removals run before additions). Adding or removing attendees always emits invitation / cancellation mail; an event with no attendees stays local.
+
+**`update` / `delete` semantics:** an event with **no attendees** is a local change (no mail). An event **with attendees** sends an iTIP UPDATE (on update) or CANCEL (on delete) to all attendees. An alerts-only edit is a personal reminder and notifies nobody.
+
+**`rsvp` semantics:** sets *your own* status on an invitation and emits an iTIP REPLY to the organizer. The id can be a calendar event ID or the invitation email's message ID - when a user asks you to respond to an invite, look it up with `emails` / `thread` and pass that message ID, since many providers leave an unanswered invite in the inbox without adding it to the calendar.
+
+Typical flow when scheduling a new meeting: `event { "mode": "create", ... }` to lay down the event, confirm the time with the user, then `event { "mode": "update", "event_id": "...", "add": [...] }` to push invitations - so the user can review before any external mail goes out. When you already have the attendees, create with `add` in one step.
+
+Run `accounts` to see writable calendars and the access level on each account.
 
 ### availability
 
@@ -459,7 +509,7 @@ Use `emails` to find message IDs. Use `thread` to see comment IDs already posted
 
 ### action
 
-**Requires triage access.**
+**Requires triage access** for most verbs. The `send` and `unschedule` verbs emit or manage outbound mail and therefore **require send access** on the owning account.
 
 Perform an action on one or more emails. Pass `action_name` plus a `message_ids` array; some actions need additional options (`date`, `folder`, `team`, `user`, `assignee`, `comment`).
 
@@ -508,6 +558,10 @@ Supported `action_name` values:
 | `assign` | Assign to teammate (`assignee`, optional `date`, `comment`) |
 | `delegationComplete` | Mark delegation as complete |
 | `delegationReopen` | Reopen a completed delegation |
+| `send` | **(send access)** Send a draft now, or schedule it with `date` ("Send Later"); on an already-scheduled message, reschedule (with `date`) or send now (no `date`) |
+| `unschedule` | **(send access)** Cancel a scheduled send and return the message to drafts |
+
+`send` takes the draft/message IDs in `message_ids` and an optional `date` to schedule (future date required). `unschedule` takes the scheduled message IDs. Both require **send** access on the owning account; the owning draft must have a recipient, a subject, uploaded attachments, and no unresolved manual template placeholders (same validation as the desktop composer). Typical flow: `draft { ... }` to compose, review, then `action { "action_name": "send", ... }` to commit - `draft` alone never sends.
 
 ```
 action { "action_name": "pin", "message_ids": ["12345"] }
@@ -526,6 +580,9 @@ action { "action_name": "assign", "message_ids": ["1234"], "assignee": "bob@co.c
 action { "action_name": "delegationComplete", "message_ids": ["1234"] }
 action { "action_name": "delegationComplete", "message_ids": ["100", "200", "300"] }
 action { "action_name": "delegationReopen", "message_ids": ["1234"] }
+action { "action_name": "send", "message_ids": ["1234"] }                                 # send a draft now (send access)
+action { "action_name": "send", "message_ids": ["1234"], "date": "2026-04-10T09:00" }     # schedule "Send Later"
+action { "action_name": "unschedule", "message_ids": ["5678"] }                           # cancel a scheduled send
 ```
 
 Use `emails` to find message IDs. Use `folders` to resolve qualified names for `moveToFolder`, `attachLabel`, and `detachLabel`. Use `team` to list teams and members for team actions.
@@ -639,9 +696,18 @@ contact-action { "action_name": "enableAutosummaryForContact", "emails": ["newsl
 2. `template { "ref": "<id|name>" }` - inspect required manual placeholders.
 3. `draft { "template": "<id|name>", "to": ["alice@co.com"], "placeholder": ["<name>=<value>"] }` - create the draft.
 
+**Send a draft (send access):**
+1. `draft { "to": ["alice@co.com"], "subject": "Hi", "body": "..." }` - compose and review.
+2. `action { "action_name": "send", "message_ids": ["<draft-ID>"] }` - send now, or add `"date"` to schedule.
+
 **Check someone's schedule for a meeting:**
 1. `availability { "tomorrow": true, "attendees": "alice@co.com,bob@co.com" }`.
 2. Suggest a time from the free slots.
+
+**Schedule a meeting and invite attendees (send access):**
+1. `availability { "week": true, "attendees": "alice@co.com,bob@co.com" }` - find a mutual slot.
+2. `event { "mode": "create", "title": "Sync", "start": "2026-07-01T14:00", "end": "2026-07-01T14:30" }` - create the event.
+3. Confirm the time with the user, then `event { "mode": "update", "event_id": "<id>", "add": ["alice@co.com", "bob@co.com"] }` - send invitations.
 
 **Comment on a shared thread:**
 1. `emails { "filter": "subject:keyword" }` - find the email.
