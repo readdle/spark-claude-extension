@@ -21,9 +21,8 @@ What Claude can do:
 ## Requirements
 
 - macOS or Windows with a recent build of [Spark Desktop](https://sparkmailapp.com), signed in to at least one account.
-- Spark CLI enabled: in Spark, go to **Settings → AI Agents → Spark CLI Setup** and follow the prompts. On Windows, restart Claude Desktop afterwards so it inherits the updated `PATH` (the same caveat as opening a new terminal).
-- For each account or shared inbox, choose the access level Claude should have: **Settings → AI Agents** (`read-only` or `triage`). Read-only allows browsing and reading; triage additionally allows drafts, comments, and email/contact actions. Shared inboxes can have a different level than their parent account.
-- Claude Desktop.
+- Spark CLI enabled: in Spark, go to **Settings → AI Agents → Spark CLI Setup** and follow the prompts.
+- Per-account access levels - `read-only`, `triage` (everything in read-only plus drafts, comments, and email/contact actions), or `send` (everything in triage plus sending mail and calendar invitations) - configured in **Settings → AI Agents -> Spark CLI Access**. Recipes and personas declare the level they need; running one against an account with insufficient access returns an error explaining how to upgrade.
 
 ## Install the extension (Claude Desktop)
 
