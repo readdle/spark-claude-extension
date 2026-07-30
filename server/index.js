@@ -29,6 +29,12 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_SPARK_PATH = process.platform === "win32" ? "spark.exe" : "/usr/local/bin/spark";
 const SPARK_PATH = process.env.SPARK_PATH || DEFAULT_SPARK_PATH;
 
+// Claude Desktop runs extensions sandboxed, where the CLI's process-ancestry
+// walk sees nothing it can attribute, so the audit log records `unknown`.
+// Declaring the initiator here is the only reliable signal. Inherited by every
+// spark child spawned below.
+process.env.AI_AGENT = process.env.AI_AGENT || "claude-desktop";
+
 const EXEC_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
