@@ -36,6 +36,10 @@ const SPARK_PATH = process.env.SPARK_PATH || DEFAULT_SPARK_PATH;
 process.env.AI_AGENT = process.env.AI_AGENT || "claude-desktop";
 
 const EXEC_TIMEOUT_MS = 60_000;
+// Attachment calls may block on an IMAP download; the CLI gives up after 90 s
+// with a clean error, and this must outlast that so the error reaches the
+// model instead of a SIGTERM.
+const ATTACHMENT_EXEC_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 // Hard cap on per-attachment file size returned through MCP content blocks.
@@ -52,6 +56,41 @@ const TEXT_LIKE_MIMES = new Set([
     "application/javascript",
     "application/ecmascript"
 ]);
+
+// The only image types Claude clients and the Anthropic API accept in an
+// `image` content block. Anything else (HEIC, TIFF, BMP, SVG...) is rejected
+// with a 400, so it travels as a resource blob instead.
+const INLINE_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+const GENERIC_MIME = "application/octet-stream";
+const MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+
+/// Lowercases, strips parameters, and rejects anything that is not a
+/// well-formed `type/subtype`. Senders ship `image/PNG` or `IMAGE/IMAGE/PNG`,
+/// and older Spark builds forward those verbatim.
+function normalizeMime(raw) {
+    if (typeof raw !== "string") return GENERIC_MIME;
+    const base = raw.split(";", 1)[0].trim().toLowerCase();
+    return MIME_PATTERN.test(base) ? base : GENERIC_MIME;
+}
+
+const MAGIC_SIGNATURES = [
+    { offset: 0, bytes: [0x25, 0x50, 0x44, 0x46], mime: "application/pdf" },
+    { offset: 0, bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], mime: "image/png" },
+    { offset: 0, bytes: [0xff, 0xd8, 0xff], mime: "image/jpeg" },
+    { offset: 0, bytes: [0x47, 0x49, 0x46, 0x38], mime: "image/gif" },
+    { offset: 8, bytes: [0x57, 0x45, 0x42, 0x50], mime: "image/webp" }
+];
+
+function sniffMime(buf) {
+    for (const { offset, bytes, mime } of MAGIC_SIGNATURES) {
+        if (buf.length < offset + bytes.length) continue;
+        if (!bytes.every((b, i) => buf[offset + i] === b)) continue;
+        if (mime === "image/webp" && buf.toString("latin1", 0, 4) !== "RIFF") continue;
+        return mime;
+    }
+    return null;
+}
 
 // Required by the Claude Connectors Directory: every tool must carry
 // either `readOnlyHint: true` or `destructiveHint: true`. The spark CLI
@@ -610,7 +649,7 @@ async function handleAttachment(input) {
     let stdout;
     try {
         ({ stdout } = await execFileAsync(SPARK_PATH, ["attachment", idStr], {
-            timeout: EXEC_TIMEOUT_MS,
+            timeout: ATTACHMENT_EXEC_TIMEOUT_MS,
             maxBuffer: MAX_OUTPUT_BYTES
         }));
     } catch (err) {
@@ -694,7 +733,7 @@ async function handleAttachment(input) {
     let bytes;
     try {
         ({ stdout: bytes } = await execFileAsync(SPARK_PATH, ["attachment", "--stream", idStr], {
-            timeout: EXEC_TIMEOUT_MS,
+            timeout: ATTACHMENT_EXEC_TIMEOUT_MS,
             maxBuffer: ATTACHMENT_MAX_BYTES + 1024,
             encoding: "buffer"
         }));
@@ -708,31 +747,48 @@ async function handleAttachment(input) {
 
     const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
 
-    const mime = parsed["MIME Type"] || "application/octet-stream";
+    const rawMime = parsed["MIME Type"] ?? "";
+    const mime = sniffMime(buf) ?? normalizeMime(rawMime);
     const name = parsed.Name || "(unnamed)";
     const messageId = parsed["Message ID"];
-    const summary = `Attachment: ${name} (${humanSize(buf.length)}, ${mime}, message ${messageId})`;
+    let summary = `Attachment: ${name} (${humanSize(buf.length)}, ${mime}, message ${messageId})`;
+
+    let block;
+    if (mime.startsWith("image/") && !INLINE_IMAGE_MIMES.has(mime)) {
+        summary += ". This image format cannot be displayed inline; the raw file is attached as a resource.";
+        block = "resource";
+    } else if (mime.startsWith("image/")) {
+        block = "image";
+    } else if (mime.startsWith("audio/")) {
+        block = "audio";
+    } else if (mime.startsWith("text/") || TEXT_LIKE_MIMES.has(mime)) {
+        block = "text";
+    } else {
+        block = "resource";
+    }
+
+    if (block === "resource") {
+        // Claude Code reads a PDF natively only when no page range is given;
+        // with `pages` it shells out to poppler, which most users lack.
+        summary += " The file is attached as a binary resource; if your client saved it to a local path, open that path with your file-reading tool, reading the whole file without a page range.";
+    }
+
+    console.error(
+        `[spark-mcp] attachment ${idStr}: mime '${rawMime}' -> '${mime}', ${block} block, ${buf.length} bytes`
+    );
 
     const content = [{ type: "text", text: summary }];
-    if (mime.startsWith("image/")) {
-        content.push({
-            type: "image",
-            data: buf.toString("base64"),
-            mimeType: mime
-        });
-    } else if (mime.startsWith("audio/")) {
-        content.push({
-            type: "audio",
-            data: buf.toString("base64"),
-            mimeType: mime
-        });
-    } else if (mime.startsWith("text/") || TEXT_LIKE_MIMES.has(mime)) {
+    if (block === "image" || block === "audio") {
+        content.push({ type: block, data: buf.toString("base64"), mimeType: mime });
+    } else if (block === "text") {
         content.push({ type: "text", text: buf.toString("utf8") });
     } else {
         content.push({
             type: "resource",
             resource: {
-                uri: `spark-attachment://${idStr}`,
+                // The filename lets clients that derive an extension from the
+                // URI materialize the blob with a usable suffix.
+                uri: `spark-attachment://${idStr}/${encodeURIComponent(name)}`,
                 mimeType: mime,
                 blob: buf.toString("base64")
             }
