@@ -10,7 +10,7 @@ description: >-
   emails, calendar, contacts, meetings, scheduling, or wants to send, reply,
   archive, snooze, assign, comment, categorize, or schedule.
 metadata:
-  version: 1.3.0
+  version: 1.3.1
   requires:
     mcp:
       - spark
@@ -65,14 +65,14 @@ Always call `accounts` once at the start of any non-trivial task to discover ava
 | `meeting` | read-only | Read a single meeting transcript |
 | `templates` | read-only | List saved message templates (personal and team) |
 | `template` | read-only | Show a single template by ID or name with its placeholders |
-| `draft` | triage | Create or edit a draft (new, reply, forward, from template); share with team |
+| `draft` | triage | Create or edit a draft (new, reply, reply-all, forward, from template); delete a draft; list account signatures; share with team |
 | `comment` | triage | Post a team comment on a thread |
 | `action` | triage (send for `send` / `unschedule`) | Perform actions on emails (archive, pin, snooze, assign, etc.); send a draft or manage a scheduled send at the **send** level |
 | `contact-action` | triage | Perform actions on contacts (block, accept, categorize, etc.) |
 
 ### accounts
 
-List all configured accounts with their calendars, teams, and shared inboxes. Output reports each account's and shared inbox's **access level** - check this before attempting any write tool. Takes no parameters.
+List all configured accounts with their aliases, calendars, teams, and shared inboxes. Output reports each account's and shared inbox's **access level** - check this before attempting any write tool. Takes no parameters.
 
 ```
 accounts {}
@@ -127,7 +127,9 @@ emails { "new_senders": true }
 | Email | `user@example.com` | Account inbox shorthand |
 | `email:Folder` | `user@example.com:Archive` | Specific account folder |
 | Team name | `My Team` | All shared threads in a team |
-| `shared@email:Folder` | `shared@co.com:Inbox` | Shared inbox folder |
+| `shared@email:Inbox` | `shared@co.com:Inbox` | Shared inbox open items (conversation view, matches Desktop) |
+| `shared@email:Archive` | `shared@co.com:Archive` | Shared inbox done/archived items (conversation view) |
+| `shared@email:Folder` | `shared@co.com:Label` | Other shared inbox folder / label |
 
 **Filter operators** (combine space-separated inside the `filter` string):
 
@@ -143,7 +145,7 @@ emails { "new_senders": true }
 | `older_than:Xd` | `older_than:30d` |
 | `has:attachment` | also `document`, `spreadsheet`, `presentation`, `reminder` |
 | `is:unread` | also `read`, `starred`, `pinned`, `unreplied` |
-| `is:shared` | emails shared to any team |
+| `is:shared` | emails shared to any team (alias for `is:shared_email`) |
 | `is:shared_inbox_open` | open items in shared inbox |
 | `is:shared_inbox_done` | completed/closed items in shared inbox |
 | `category:<name>` | `priority`, `personal`, `notification`, `newsletter`, `invitation`, `invitation_response` |
@@ -191,6 +193,8 @@ Read every message in a conversation - headers, plain-text bodies, attachment in
 thread { "message_id": "1114" }
 thread { "message_id": "1114", "download_attachments": true }
 ```
+
+A `Reply-To:` line appears only when that header points somewhere other than `From` - mailing lists and website contact forms carry the real correspondent there. `draft { "reply_to": ... }` already addresses the reply to it, so don't pass `to` yourself.
 
 Each message's `Attachments:` block is a table with columns `ID`, `Name`, `Size`, and `MIME Type`. The `ID` is a stable integer - pass it to the `attachment` tool to read the file's bytes (images, PDFs, text, audio). Local filesystem paths are deliberately omitted because sandboxed MCP clients can't follow them; the `attachment` tool is the only path to attachment contents through this connection.
 
@@ -420,10 +424,11 @@ If a name matches more than one template, the call errors with the matching IDs 
 
 **Requires triage access.**
 
-Create a new email draft or edit an existing one. The body is markdown and is converted to HTML. Seed a draft from an existing message with `reply_to` or `forward`, update an existing draft with `edit`, apply a saved template with `template`, and collaborate with teammates with the sharing parameters.
+Create a new email draft or edit an existing one. The body is markdown and is converted to HTML. Seed a draft from an existing message with `reply_to`, `reply_all`, or `forward`, update an existing draft with `edit`, apply a saved template with `template`, list account signatures with `mode`, delete a draft with `delete`, and collaborate with teammates with the sharing parameters.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| `mode` | string | no | Pass `"signatures"` to list the signature each account appends instead of touching a draft. Must be the only parameter. |
 | `to` | array of string | no | Recipient addresses. |
 | `cc` | array of string | no | CC addresses. |
 | `bcc` | array of string | no | BCC addresses. |
@@ -431,11 +436,14 @@ Create a new email draft or edit an existing one. The body is markdown and is co
 | `body` | string | no (yes for new) | Body content in markdown. Required for a new draft unless a template supplies one. |
 | `account` | string | no | Account email to send from. Personal accounts, aliases, and shared-inbox emails are all valid - any account that has triage access. |
 | `edit` | string | no | Message ID (or Spark deep link) of an existing draft to update. |
-| `reply_to` | string | no | Message ID (or deep link) to reply to. |
+| `reply_to` | string | no | Message ID (or deep link) to reply to. Addresses the sender alone (or the `Reply-To:` address when the message carries one). |
+| `reply_all` | string | no | Message ID (or deep link) to reply to while keeping everyone else on the thread: the other `To:` recipients land in To, the original `Cc:` in CC, minus your own address. Mutually exclusive with `reply_to`; `to` / `cc` override the lists it builds. |
 | `forward` | string | no | Message ID (or deep link) to forward. |
+| `delete` | string | no | Message ID (or deep link) of a draft to delete **permanently**. Must be the only parameter. Drafts have no Trash, so the deletion cannot be undone. A scheduled draft and a draft shared with teammates are both refused - `action { "action_name": "unschedule", ... }` or `draft { "edit": "<pk>", "unshare": true }` first. |
 | `attach` | array of string | no | Absolute paths to files to attach. |
 | `template` | string | no | Apply a saved template by ID or name. Combine with `edit` to overlay it onto an existing draft. |
 | `placeholder` | array of string | no | Fill manual template placeholders, each `"<name>=<value>"`. Auto placeholders (recipient/self name) resolve from `to`/`account` and are not addressable here. |
+| `no_signature` | boolean | no | Send without a signature, suppressing the account's default for this draft. On `edit` it strips a signature already on the draft, keeping the body and quoted thread. |
 | `team` | string | no | Team to share the draft with. Required when you belong to multiple teams; on an already-shared draft, must match the owning team. |
 | `user` | array of string | no | Teammate emails to share with. On an already-shared draft this **adds** collaborators - use `remove_user` to remove. |
 | `remove_user` | array of string | no | Teammate emails to **remove** from a shared draft, preserving the share, its comments, and remaining collaborators. Requires `edit` of a shared draft. Cannot remove yourself - use `unshare`. |
@@ -448,10 +456,15 @@ draft { "to": ["alice@example.com"], "subject": "Hello", "body": "Hi Alice, ..."
 draft { "to": ["alice@co.com", "bob@co.com"], "cc": ["carol@co.com"], "subject": "Meeting", "body": "..." }
 draft { "edit": "1234", "subject": "Updated subject", "body": "Updated body" }
 draft { "reply_to": "5678", "body": "Thanks for the update!" }
+draft { "reply_all": "5678", "body": "Thanks everyone!" }
 draft { "forward": "5678", "to": ["manager@co.com"], "body": "FYI" }
 draft { "account": "john@gmail.com", "to": ["alice@co.com"], "subject": "Hi", "body": "..." }
+draft { "mode": "signatures" }
+draft { "to": ["alice@co.com"], "subject": "Quick note", "body": "...", "no_signature": true }
+draft { "edit": "1234", "no_signature": true }
 draft { "to": ["alice@co.com"], "subject": "Report", "body": "See attached", "attach": ["/path/to/report.pdf"] }
 draft { "to": ["alice@co.com"], "subject": "Files", "body": "Two files", "attach": ["/path/to/a.pdf", "/path/to/b.xlsx"] }
+draft { "delete": "1234" }
 ```
 
 Apply a saved template (run `template` first to learn its manual placeholders):
@@ -471,15 +484,19 @@ draft { "edit": "1234", "disallow_send": true }                                 
 draft { "edit": "1234", "unshare": true }
 ```
 
-Use `emails` to find message IDs for `edit`, `reply_to`, and `forward`. Use `accounts` to find account emails for `account` - both personal accounts and shared inboxes are listed there, and either can be used as the from address when the account has triage access. Use `team` to list teams and members for `team`/`user`.
+Use `emails` to find message IDs for `edit`, `reply_to`, `reply_all`, and `forward`. Use `accounts` to find account emails for `account` - personal accounts, their aliases, and shared inboxes are all listed there, and any of them can be used as the from address when the account has triage access. Use `team` to list teams and members for `team`/`user`.
 
 **Templates.** Run `template { "ref": "<id|name>" }` before `draft { "template": ... }` to discover required manual placeholders - a missing manual placeholder is a hard error before any draft is created. Explicit fields always win over template fields.
 
-**Threading is critical.** When a message belongs to an existing conversation, you **must** pass `reply_to` with the **last message in that thread** - that is what attaches the draft to the conversation (correct In-Reply-To/References headers, same thread in the recipient's mailbox). Without `reply_to` the draft starts a brand new thread, which is almost always wrong when the user said "reply", "respond", "follow up", or "ping" within an existing conversation. Use `thread` to inspect the conversation and pick the most recent message's ID.
+**The signature is added for you - never write your own sign-off.** Spark appends the mailbox's default signature to every draft body. `draft { "mode": "signatures" }` prints what each mailbox appends. When the user wants a closing that differs from their signature, pass `no_signature: true` and write the whole closing yourself. The response echoes the composed body under `Body:` - read it back to confirm the draft says what you meant, and to catch a sign-off of your own standing next to the account's.
+
+**Threading is critical.** When a message belongs to an existing conversation, you **must** pass `reply_to` with the **last message in that thread** - that is what attaches the draft to the conversation (correct In-Reply-To/References headers, same thread in the recipient's mailbox). Without `reply_to` the draft starts a brand new thread, which is almost always wrong when the user said "reply", "respond", "follow up", or "ping" within an existing conversation. Use `thread` to inspect the conversation and pick the most recent message's ID. On a thread with several participants, use `reply_all` unless the user wants a private answer to the sender.
 
 **Follow-ups (no reply yet).** When following up on a thread whose most recent message is your own outgoing one (e.g. "nudge Alice - she never replied"), use that outgoing message's ID as `reply_to` so the follow-up stays attached as a bump rather than a new cold email.
 
 **Sharing.** Sharing is triggered by the presence of `team` or `user`; teams with exactly one other active member auto-share with everyone, otherwise `user` is required. To change collaborators or the send-on-behalf setting on an existing shared draft, pass `edit` together with the sharing params - the change is applied to the existing share. Content edits (`to`/`cc`/`bcc`/`subject`/`body`/`attach`) and sharing updates (`team`/`user`/`remove_user`/`allow_send`/`disallow_send`) must be issued as **separate** calls, and `unshare` cannot be combined with either.
+
+**Deleting a draft is final.** `delete` removes the draft outright - unlike a received email there is no Trash to recover it from. Only delete a draft the user asked you to discard, and say so plainly in your response rather than implying it can be restored. To throw away just the *text* of a draft while keeping the draft itself, edit it (`draft { "edit": "<pk>", "body": "..." }`) instead.
 
 ### comment
 
@@ -763,4 +780,6 @@ contact-action { "action_name": "enableAutosummaryForContact", "emails": ["newsl
 - Use `thread` after finding an interesting message ID with `emails` or `search`.
 - Multi-word subjects and team names must be quoted inside the filter string: `subject:"quarterly report"`.
 - `action` and `contact-action` accept arrays of IDs/emails - batch related changes into a single call rather than one call per message.
+- Never end a draft body with a sign-off: Spark appends the account's signature itself (`draft { "mode": "signatures" }` shows it).
+- `draft { "delete": "<pk>" }` discards a draft permanently - there is no Trash and no undo, so use it only when the user asked for it.
 - If a write tool returns an "access denied" error, surface it to the user and point them at **Spark Desktop > Settings > AI Agents** to raise the level. They can also perform the action directly in Spark Desktop.

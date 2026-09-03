@@ -2,7 +2,7 @@
     "manifest_version": "0.3",
     "name": "Spark",
     "display_name": "Spark",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "description": "Connect Claude to your inbox — read, draft, triage, and act on email, calendars, meetings, and contacts.",
     "long_description": "Connect Claude to Spark on macOS or Windows to give your agent access to your emails. Ask about your inbox, then let Claude do the work — read threads, organize your inbox, and draft replies without leaving the conversation.\n\nTools are discovered dynamically when Spark Desktop is running, so Claude always sees what’s actually available.\n\nKey Features:\n• **Connect any account** — Give Claude access to any Spark email account, including Gmail, Outlook, Exchange, iCloud, Yahoo, and IMAP.\n• **Read and search your workspace** — Browse and search emails, list folders, read full threads with bodies and attachments, look up contacts, and review meeting transcripts.\n• **Check schedules and availability** — Look up calendar events and find mutual availability with teammates.\n• **Manage your calendar** — Create, update, delete, and RSVP to events, and invite or remove attendees (send access).\n• **Compose, send, and share drafts** — Create new emails, replies, and forwards (with attachments or from saved templates), send them now or schedule them for later, and share them with teammates for review.\n• **Triage conversations** — Archive, pin, snooze, move, label, mark as done, share with the team, and assign or delegate messages.\n• **Organize and manage** — Reclassify smart categories and manage contacts (block/accept, set category, mark important/primary, toggle auto-summary).\n• **Collaborate in context** — Post team chat comments on shared threads.\n\n**Access and Permissions**: Each account and shared inbox has its own access level — read-only, triage, or send — configurable in Spark Desktop > Settings > AI Agents. Write access (drafting, triage, and contact management) and send access (sending drafts and managing calendar events) are only available where you’ve enabled them.",
     "author": {
@@ -72,7 +72,7 @@
         },
         {
             "name": "draft",
-            "description": "Create or edit an email draft - new, reply, forward, update, or from a saved template; supports attachments, markdown body, and sharing with teammates"
+            "description": "Create or edit an email draft - new, reply, reply-all, forward, update, delete, list signatures, or from a saved template; supports attachments, markdown body, and sharing with teammates"
         },
         {
             "name": "comment",
