@@ -10,7 +10,7 @@ description: >-
   emails, calendar, contacts, meetings, scheduling, or wants to send, reply,
   archive, snooze, assign, comment, categorize, or schedule.
 metadata:
-  version: 1.3.1
+  version: 1.4.0
   requires:
     mcp:
       - spark
@@ -59,7 +59,8 @@ Always call `accounts` once at the start of any non-trivial task to discover ava
 | `events` | read-only | List calendar events for a time range |
 | `event` | send | Create, update, delete, or RSVP to a calendar event; invite or remove attendees |
 | `availability` | read-only | Find free time slots, optionally with attendees |
-| `contacts` | read-only | Search contacts by name or email |
+| `contacts` | read-only | Search contacts by name or email, or list the most-used ones |
+| `contact` | read-only | Show one contact's details and settings |
 | `team` | read-only | Show team info, members, shared inboxes, assignments |
 | `meetings` | read-only | List meeting transcripts |
 | `meeting` | read-only | Read a single meeting transcript |
@@ -321,16 +322,39 @@ availability { "start": "2026-03-16", "end": "2026-03-20", "attendees": "a@co.co
 
 ### contacts
 
-Search contacts by name or email. Strict match first, then fuzzy fallback.
+Search contacts by name or email. Strict match first, then fuzzy fallback. Without a query, lists the contacts the user writes to most, most-used first.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `query` | string | yes | Name or email to search for. |
+| `query` | string | no | Name or email to search for. Omit to list the most-used contacts. |
+| `limit` | integer | no | Maximum number of contacts, 1-1000 (default: 25). |
 
 ```
 contacts { "query": "john" }
 contacts { "query": "example.com" }
+contacts { "limit": 100 }
 ```
+
+### contact
+
+Show one contact's details: name, other addresses, and each setting `contact-action` changes. Check a sender's state before changing it - e.g. whether they are already Priority or blocked. An unknown address is an error.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `email` | string | yes | The contact's email address. |
+
+```
+contact { "email": "bob@example.com" }
+```
+
+| Field | Changed by (`contact-action`) |
+|-------|-----------|
+| Category (`personal` / `notification` / `newsletter`) | `changeCategory*` |
+| Priority | `markContactAsPrimary` / `unmarkContactAsPrimary` |
+| Notifications | `markContactAsImportant` / `unmarkContactAsImportant` |
+| GateKeeper: blocked / accepted (neither for a new sender) | `blockContact` / `acceptContact` |
+| Grouped (in Inbox or by category) | `groupEmailsFromContact[AndShowInInbox]` / `ungroupEmailsFromContact` |
+| Auto-summary | `enableAutosummaryForContact` / `disableAutosummaryForContact` |
 
 ### team
 
