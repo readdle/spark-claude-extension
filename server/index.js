@@ -254,7 +254,7 @@ function buildCliArgs(toolDef, input) {
     return [...positional, ...flagged];
 }
 
-const EXPECTED_SPARK_VERSION = "1.3.1";
+const EXPECTED_SPARK_VERSION = "1.4.0";
 
 // Load the catalog eagerly so the `initialize` handshake can forward the
 // Spark skill to Claude as the server's `instructions` field. If the
